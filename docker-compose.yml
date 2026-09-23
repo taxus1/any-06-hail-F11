@@ -1,0 +1,35 @@
+version: "3.8"
+
+# 一键起环境：mysql 8 + redis 7。仓库自带，符合标注规范「已容器化，可一键起环境」。
+# 用法：docker compose up -d
+services:
+  mysql:
+    image: mysql:8.2.0
+    container_name: some-pro-mysql
+    restart: always
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: some_pro
+      TZ: Asia/Shanghai
+    ports:
+      - "3306:3306"
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+      - --default-time-zone=+08:00
+    volumes:
+      - some-pro-mysql-data:/var/lib/mysql
+
+  redis:
+    image: redis:7.2
+    container_name: some-pro-redis
+    restart: always
+    ports:
+      - "6379:6379"
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - some-pro-redis-data:/data
+
+volumes:
+  some-pro-mysql-data:
+  some-pro-redis-data:

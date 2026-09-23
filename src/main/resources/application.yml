@@ -1,0 +1,33 @@
+spring:
+  application:
+    name: some-pro
+  profiles:
+    active: ${SPRING_PROFILES_ACTIVE:dev}
+  jackson:
+    date-format: yyyy-MM-dd HH:mm:ss
+    time-zone: GMT+8
+    default-property-inclusion: non_null
+  codec:
+    max-in-memory-size: 10MB
+
+server:
+  port: ${SERVER_PORT:8080}
+
+# ---------- MyBatis-Plus ----------
+mybatis-plus:
+  configuration:
+    # 显式开启驼峰-下划线映射（delFlag <-> del_flag 等）
+    map-underscore-to-camel-case: true
+  global-config:
+    db-config:
+      # ID 由应用层用雪花算法分配（见仓储适配器），与实体上的 IdType.INPUT 保持一致
+      id-type: input
+
+# ---------- PageHelper 分页 ----------
+# 注意：分页只认 PageHelper，不要再注册 MyBatis-Plus 的 PaginationInnerInterceptor（见 MybatisPlusConfig）
+pagehelper:
+  helper-dialect: mysql
+  # 页码越界时保持返回空页，不做自动收敛，便于验收测试断言边界
+  reasonable: false
+  support-methods-arguments: true
+  params: count=countSql
