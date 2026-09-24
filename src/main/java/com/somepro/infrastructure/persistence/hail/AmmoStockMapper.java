@@ -29,13 +29,29 @@ public interface AmmoStockMapper extends BaseMapper<AmmoStockPO> {
     /**
      * 原子累加发数并顺带校准日期（同批次日期理应一致，非空才覆盖）。
      * 只影响未删除行，返回受影响行数（0 表示这条库存还不存在，调用方改走 insert）。
+     * 手写 SQL 不经 MetaObjectHandler，update_by / update_time 在此显式更新。
      */
     @Update("UPDATE t_ammo_stock SET quantity = quantity + #{delta}, "
             + "produce_date = COALESCE(#{produceDate}, produce_date), "
-            + "expire_date = COALESCE(#{expireDate}, expire_date) "
+            + "expire_date = COALESCE(#{expireDate}, expire_date), "
+            + "update_by = #{operator}, update_time = #{now} "
             + "WHERE id = #{id} AND del_flag = 0")
     int addQuantity(@Param("id") Long id,
                     @Param("delta") int delta,
                     @Param("produceDate") java.time.LocalDate produceDate,
-                    @Param("expireDate") java.time.LocalDate expireDate);
+                    @Param("expireDate") java.time.LocalDate expireDate,
+                    @Param("operator") String operator,
+                    @Param("now") java.time.LocalDateTime now);
+
+    /**
+     * 原子划出 qty 发：只有结存 ≥ qty 才扣得动（{@code quantity >= #{qty}}），
+     * 防「先查后扣」超领与并发丢更新，返回受影响行数（0 = 结存不足或行失效）。
+     */
+    @Update("UPDATE t_ammo_stock SET quantity = quantity - #{qty}, "
+            + "update_by = #{operator}, update_time = #{now} "
+            + "WHERE id = #{id} AND quantity >= #{qty} AND del_flag = 0")
+    int deductQuantity(@Param("id") Long id,
+                       @Param("qty") int qty,
+                       @Param("operator") String operator,
+                       @Param("now") java.time.LocalDateTime now);
 }

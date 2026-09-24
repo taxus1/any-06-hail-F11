@@ -1,10 +1,18 @@
 package com.somepro.interfaces.rest.hail.converter;
 
+import com.somepro.domain.hail.model.AirspaceApply;
+import com.somepro.domain.hail.model.AmmoRecord;
 import com.somepro.domain.hail.model.AmmoStock;
+import com.somepro.domain.hail.model.EffectReport;
+import com.somepro.domain.hail.model.FireOrder;
 import com.somepro.domain.hail.model.Launcher;
 import com.somepro.domain.hail.model.OperationSite;
 import com.somepro.domain.shared.model.PageResult;
+import com.somepro.interfaces.rest.hail.vo.AirspaceApplyVO;
+import com.somepro.interfaces.rest.hail.vo.AmmoRecordVO;
 import com.somepro.interfaces.rest.hail.vo.AmmoStockVO;
+import com.somepro.interfaces.rest.hail.vo.EffectReportVO;
+import com.somepro.interfaces.rest.hail.vo.FireOrderVO;
 import com.somepro.interfaces.rest.hail.vo.HailPageVO;
 import com.somepro.interfaces.rest.hail.vo.LauncherVO;
 import com.somepro.interfaces.rest.hail.vo.OperationSiteVO;
@@ -39,6 +47,33 @@ public final class HailVoConverter {
     public static AmmoStockVO toVo(AmmoStock a) {
         return new AmmoStockVO(a.getId(), a.getSiteId(), a.getAmmoType(), a.getBatchNo(),
                 a.getQuantity(), a.getProduceDate(), a.getExpireDate(), a.getCreateTime());
+    }
+
+    public static AirspaceApplyVO toVo(AirspaceApply a) {
+        return new AirspaceApplyVO(a.getId(), a.getApplyNo(), a.getSiteId(),
+                a.getPurpose() == null ? null : a.getPurpose().name(),
+                a.getPlanStart(), a.getPlanEnd(), a.getMaxAltitude(),
+                a.getStatus() == null ? null : a.getStatus().name(),
+                a.getRejectReason(), a.getApproveTime(), a.getCreateTime());
+    }
+
+    public static FireOrderVO toVo(FireOrder o) {
+        return new FireOrderVO(o.getId(), o.getOrderNo(), o.getApplyId(), o.getSiteId(),
+                o.getLauncherId(), o.getAmmoType(), o.getPlanRounds(), o.getUsedRounds(),
+                o.getStatus() == null ? null : o.getStatus().name(),
+                o.getStartTime(), o.getEndTime(), o.getCreateTime());
+    }
+
+    public static AmmoRecordVO toVo(AmmoRecord r) {
+        return new AmmoRecordVO(r.getId(), r.getSiteId(), r.getAmmoType(), r.getBatchNo(),
+                r.getChangeQty(), r.getBizType() == null ? null : r.getBizType().name(),
+                r.getRefNo(), r.getCreateTime());
+    }
+
+    public static EffectReportVO toVo(EffectReport r) {
+        return new EffectReportVO(r.getId(), r.getOrderId(), r.getReportTime(),
+                r.getRainfallMm(), r.getHailSizeMm(), r.getAreaKm2(), r.getRemark(),
+                r.getCreateTime());
     }
 
     /** 领域分页结果 → 对外分页 VO 的通用转换。 */

@@ -1,5 +1,6 @@
 package com.somepro.application.hail;
 
+import com.somepro.application.hail.port.HailOperationFlowPort;
 import com.somepro.common.exception.BizException;
 import com.somepro.domain.hail.model.AmmoStock;
 import com.somepro.domain.hail.model.Launcher;
@@ -33,10 +34,11 @@ class HailAppServiceTest {
     private final OperationSiteRepository siteRepo = mock(OperationSiteRepository.class);
     private final LauncherRepository launcherRepo = mock(LauncherRepository.class);
     private final AmmoStockRepository ammoRepo = mock(AmmoStockRepository.class);
+    private final HailOperationFlowPort flowPort = mock(HailOperationFlowPort.class);
 
     private final OperationSiteAppService siteApp = new OperationSiteAppService(siteRepo);
     private final LauncherAppService launcherApp = new LauncherAppService(launcherRepo, siteRepo);
-    private final AmmoStockAppService ammoApp = new AmmoStockAppService(ammoRepo, siteRepo);
+    private final AmmoStockAppService ammoApp = new AmmoStockAppService(ammoRepo, siteRepo, flowPort);
 
     @Test
     void registerSite_success_whenCodeFree() {
@@ -126,7 +128,7 @@ class HailAppServiceTest {
         StepVerifier.create(ammoApp.inbound(404L, "BL-1A", "B1", 10, null, null))
                 .expectErrorMatches(e -> e instanceof BizException && e.getMessage().contains("作业点不存在"))
                 .verify();
-        verify(ammoRepo, never()).inbound(any());
+        verify(flowPort, never()).inboundWithRecord(any());
     }
 
     @Test
@@ -143,15 +145,15 @@ class HailAppServiceTest {
     }
 
     @Test
-    void inbound_delegatesAccumulationToRepository_whenSiteExists() {
+    void inbound_delegatesToFlowPort_whenSiteExists() {
         OperationSite site = OperationSite.register("YY-013", "点", null, null, null, null, "ACTIVE");
         site.setId(1L);
         when(siteRepo.findById(1L)).thenReturn(Mono.just(site));
-        // 模拟仓储内部「查到旧记录 → 累加」，返回结存 150
+        // 入库累加 + IN 流水由事务端口完成，返回结存 150
         AmmoStock merged = AmmoStock.newStock(1L, "BL-1A", "B2026-01", 150,
                 LocalDate.of(2026, 1, 1), LocalDate.of(2028, 1, 1));
         merged.setId(100L);
-        when(ammoRepo.inbound(any(AmmoStock.class))).thenReturn(Mono.just(merged));
+        when(flowPort.inboundWithRecord(any(AmmoStock.class))).thenReturn(Mono.just(merged));
 
         StepVerifier.create(ammoApp.inbound(1L, "BL-1A", "B2026-01", 50,
                         LocalDate.of(2026, 1, 1), LocalDate.of(2028, 1, 1)))
@@ -160,8 +162,8 @@ class HailAppServiceTest {
                     assert s.getQuantity() == 150;
                 })
                 .verifyComplete();
-        // 暂态入库对象携带的是本次入库量 50，累加由仓储完成
-        verify(ammoRepo).inbound(org.mockito.ArgumentMatchers.argThat(
+        // 暂态入库对象携带的是本次入库量 50，累加与流水由事务端口完成
+        verify(flowPort).inboundWithRecord(org.mockito.ArgumentMatchers.argThat(
                 a -> a.getQuantity() == 50 && a.getAmmoType().equals("BL-1A")));
     }
 

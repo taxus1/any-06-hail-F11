@@ -1,5 +1,6 @@
 package com.somepro.application.hail;
 
+import com.somepro.application.hail.port.HailOperationFlowPort;
 import com.somepro.common.exception.BizException;
 import com.somepro.domain.hail.model.AmmoStock;
 import com.somepro.domain.hail.repository.AmmoStockRepository;
@@ -13,37 +14,38 @@ import java.time.LocalDate;
 /**
  * 弹药应用服务：编排「入库、翻看」用例（应用层）。
  *
- * 入库规则（核心）：同一作业点 + 同一种弹型 + 同一个批次，再入一次不另起一条，
- * 累加到原记录上 —— 去重与原子累加的具体落库在 {@code AmmoStockRepository#inbound}。
- * 这里负责：先确认作业点真实存在，再用领域工厂构造经校验的入库对象，交给仓储决定新增/累加。
+ * 入库是一次跨两表的业务动作：库存累加 + 一笔 IN 入库流水，必须同事务，
+ * 所以写操作统一走 {@link HailOperationFlowPort#inboundWithRecord}；本服务只负责
+ * 先确认作业点真实存在、用领域工厂构造经校验的入库对象。
  */
 @Service
 public class AmmoStockAppService {
 
     private final AmmoStockRepository ammoStockRepository;
     private final OperationSiteRepository siteRepository;
+    private final HailOperationFlowPort flowPort;
 
     public AmmoStockAppService(AmmoStockRepository ammoStockRepository,
-                               OperationSiteRepository siteRepository) {
+                               OperationSiteRepository siteRepository,
+                               HailOperationFlowPort flowPort) {
         this.ammoStockRepository = ammoStockRepository;
         this.siteRepository = siteRepository;
+        this.flowPort = flowPort;
     }
 
     /**
-     * 弹药入库。
+     * 弹药入库：同点 + 同弹型 + 同批次累加原记录，并在流水账上记一笔 IN。
      *
      * @param inboundQty 本次入库发数，必须为正
      */
     public Mono<AmmoStock> inbound(Long siteId, String ammoType, String batchNo, int inboundQty,
                                    LocalDate produceDate, LocalDate expireDate) {
-        // 先校验必填/正数/日期先后等领域不变量（得到一条尚未落库的暂态库存，其数量即本次入库量）
         AmmoStock incoming = AmmoStock.newStock(
                 siteId, ammoType, batchNo, inboundQty, produceDate, expireDate);
-        // 弹药总得挂在某个真实作业点上（库存档案以库里为准，可能有早先数据）
         return siteRepository.findById(incoming.getSiteId())
                 .switchIfEmpty(Mono.error(new BizException(
                         "作业点不存在：siteId=" + incoming.getSiteId())))
-                .flatMap(site -> ammoStockRepository.inbound(incoming));
+                .flatMap(site -> flowPort.inboundWithRecord(incoming));
     }
 
     public Mono<AmmoStock> getById(Long id) {

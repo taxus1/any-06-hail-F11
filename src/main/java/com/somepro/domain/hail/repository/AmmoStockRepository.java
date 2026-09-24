@@ -7,7 +7,8 @@ import reactor.core.publisher.Mono;
 /**
  * 弹药库存仓储端口（领域层定义，基础设施层实现）。
  *
- * 同点 + 同弹型 + 同批次的库存只有一条，再次入库走 {@link #inbound}，由其内部决定新增还是累加。
+ * 写操作（入库累加、开单划出、回报退回）都涉及「库存 + 流水」多表同事务，
+ * 统一走 {@code HailOperationFlowPort}；本端口只负责读：查唯一批次与分页翻看。
  */
 public interface AmmoStockRepository {
 
@@ -15,14 +16,6 @@ public interface AmmoStockRepository {
     Mono<AmmoStock> findUnique(Long siteId, String ammoType, String batchNo);
 
     Mono<AmmoStock> findById(Long id);
-
-    /**
-     * 入库（幂等累加语义）：
-     * 传入的是一条经领域校验、尚未落库（id 为空）的库存对象，其 quantity 即本次入库发数。
-     * 已有同点 + 同弹型 + 同批次记录就在原记录上原子累加发数，没有则新建一条；
-     * 并发下撞唯一索引时退化为累加，绝不另起第二条。返回落库后的最新库存。
-     */
-    Mono<AmmoStock> inbound(AmmoStock incoming);
 
     /**
      * 分页翻看库存。
