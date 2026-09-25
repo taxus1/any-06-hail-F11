@@ -5,14 +5,17 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.github.pagehelper.PageHelper;
 import com.somepro.domain.hail.model.FireOrder;
+import com.somepro.domain.hail.model.OrderOccupancy;
 import com.somepro.domain.hail.repository.FireOrderRepository;
 import com.somepro.domain.shared.model.PageResult;
 import com.somepro.infrastructure.persistence.hail.converter.FireOrderPoConverter;
 import com.somepro.infrastructure.persistence.hail.po.FireOrderPO;
+import com.somepro.infrastructure.persistence.hail.po.OrderOccupancyPO;
 import com.somepro.infrastructure.persistence.support.BlockingRepositorySupport;
 import org.springframework.stereotype.Repository;
 import reactor.core.publisher.Mono;
 
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.stream.Collectors;
 
@@ -100,5 +103,20 @@ public class FireOrderRepositoryImpl extends BlockingRepositorySupport implement
                 PageHelper.clearPage();
             }
         });
+    }
+
+    @Override
+    public Mono<List<OrderOccupancy>> findActiveOccupancies(Long siteId,
+                                                            LocalDateTime from,
+                                                            LocalDateTime to) {
+        return blocking(() -> mapper.selectActiveOccupancies(siteId, from, to).stream()
+                .map(FireOrderRepositoryImpl::toOccupancy)
+                .collect(Collectors.toList()));
+    }
+
+    private static OrderOccupancy toOccupancy(OrderOccupancyPO po) {
+        return new OrderOccupancy(po.getOrderId(), po.getOrderNo(), po.getApplyId(), po.getApplyNo(),
+                po.getLauncherId(), po.getLauncherCode(), po.getWindowStart(), po.getWindowEnd(),
+                po.getOrderCreateTime());
     }
 }

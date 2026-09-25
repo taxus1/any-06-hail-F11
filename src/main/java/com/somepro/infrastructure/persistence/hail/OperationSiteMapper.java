@@ -22,4 +22,13 @@ public interface OperationSiteMapper extends BaseMapper<OperationSitePO> {
      */
     @Select("SELECT * FROM t_operation_site WHERE site_code = #{siteCode} AND del_flag = 0 LIMIT 1")
     OperationSitePO selectByCode(@Param("siteCode") String siteCode);
+
+    /**
+     * 主键行锁：开单事务一开始先把作业点行锁住。
+     * 同一作业点上「两张空域同时段撞车」「同一张空域拆两单」「两台单子点同一台装备」的并发竞争
+     * 全靠它把同点开单串行化 —— 两人同一瞬间抢同一段时辰，先拿到行锁的成，后到的看见占单被挡回。
+     * 必须在事务内调用（FOR UPDATE 随事务提交释放）。
+     */
+    @Select("SELECT id FROM t_operation_site WHERE id = #{siteId} AND del_flag = 0 FOR UPDATE")
+    Long selectIdForUpdate(@Param("siteId") Long siteId);
 }

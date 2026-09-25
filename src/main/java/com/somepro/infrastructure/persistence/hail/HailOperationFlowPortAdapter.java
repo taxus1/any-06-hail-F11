@@ -44,6 +44,11 @@ public class HailOperationFlowPortAdapter extends BlockingRepositorySupport
     }
 
     @Override
+    public Mono<FireOrder> voidOrder(FireOrder order, String batchNo) {
+        return blocking(() -> executor.doVoidOrder(order, batchNo));
+    }
+
+    @Override
     public Mono<EffectReport> submitReport(EffectReport report) {
         return blocking(() -> executor.doSubmitReport(report));
     }

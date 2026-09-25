@@ -20,6 +20,11 @@ import java.time.LocalDateTime;
  *   所以指令上的计划发数不允许再改。
  * - 回报实际发数：0 ≤ used ≤ plan；没用完的（plan - used）由应用层退回结存（RETURN 流水），
  *   回报后指令置 DONE，一条指令只能回报一次。
+ * - 作废（收摊）只允许「一发都没打」的在途指令（ISSUED / EXECUTING）：
+ *   原划走的弹原封退回结存并记 RETURN 流水，装备与所占空域时段随即腾出，指令置 VOID；
+ *   作废必须幂等 —— 已经是 VOID 的再点一次原样返回，绝不允许再退一次弹（重复记账由
+ *   基础设施层条件更新 + 应用层 VOID 直返双保险）。
+ * - 时段边界：实际作业必须完整落在所挂空域的批复时段内，起早了、拖晚了都不许回报完成。
  *
  * 注意：批次号不在本表（表上没有该列），领用批次记在 t_ammo_record 的 OUT 流水上。
  */
@@ -107,6 +112,43 @@ public class FireOrder extends BaseEntity {
         this.endTime = endTime;
         this.status = OrderStatus.DONE;
         return returned;
+    }
+
+    /**
+     * 领域行为：作废（收摊）。只允许一发都没打（usedRounds 为 0）的在途指令作废；
+     * 作废后由应用层 / 事务端口把开单划走的计划发数原封退回结存（RETURN 流水）并腾出装备。
+     *
+     * 作废幂等：对已经 VOID 的指令再作废一次，原样放行（不报错、不再退弹），
+     * 是否真的走退弹事务由应用层先判断状态决定。
+     */
+    public void voidOut(String reason) {
+        if (status == OrderStatus.VOID) {
+            return;
+        }
+        if (status == OrderStatus.DONE) {
+            throw new BizException("指令已完成回报，不能作废：" + orderNo);
+        }
+        if (usedRounds != null && usedRounds > 0) {
+            throw new BizException("已实弹发射 " + usedRounds + " 发的指令不能作废，"
+                    + "只有一发都没打的单子才能收摊作废：" + orderNo);
+        }
+        this.voidReason = reason == null || reason.isBlank() ? null : reason.trim();
+        this.status = OrderStatus.VOID;
+    }
+
+    /**
+     * 领域守卫：实际作业时段必须完整落在空域批复时段内，起早了、拖晚了都不行。
+     * 时刻为 null（没报）的一边不参与判断；结束不得早于开始已在 {@link #reportFire} 校验。
+     */
+    public void ensureWithinAirspace(LocalDateTime airspaceStart, LocalDateTime airspaceEnd) {
+        if (startTime != null && airspaceStart != null && startTime.isBefore(airspaceStart)) {
+            throw new BizException("实际作业起早了：" + startTime + " 早于空域批复开始 " + airspaceStart
+                    + "，作业必须完整落在空域时段内");
+        }
+        if (endTime != null && airspaceEnd != null && endTime.isAfter(airspaceEnd)) {
+            throw new BizException("实际作业拖晚了：" + endTime + " 晚于空域批复结束 " + airspaceEnd
+                    + "，作业必须完整落在空域时段内");
+        }
     }
 
     public void changeNo(String orderNo) {

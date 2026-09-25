@@ -8,7 +8,9 @@ import com.somepro.domain.hail.model.AmmoStock;
 import com.somepro.domain.hail.model.EffectReport;
 import com.somepro.domain.hail.model.FireOrder;
 import com.somepro.domain.hail.model.Launcher;
+import com.somepro.domain.hail.model.OccupancySlot;
 import com.somepro.domain.hail.model.OperationSite;
+import com.somepro.domain.hail.model.OrderOccupancy;
 import org.junit.jupiter.api.Test;
 import org.springframework.dao.DuplicateKeyException;
 import reactor.core.publisher.Mono;
@@ -264,16 +266,28 @@ class OperationFlowAppServiceTest {
 
     // ---------------- 回报 ----------------
 
+    /** 回报用实际时刻：落在测试空域（2026-10-01 14:00–16:00）批复时段内。 */
+    private static final LocalDateTime IN_WINDOW_START =
+            LocalDateTime.of(2026, 10, 1, 14, 30);
+    private static final LocalDateTime IN_WINDOW_END =
+            LocalDateTime.of(2026, 10, 1, 15, 0);
+
+    /** 给回报链路补齐「查指令挂的空域」桩（时段边界校验要读空域批复时段）。 */
+    private void stubReportPrerequisites(FireOrder order) {
+        when(orderRepo.findById(order.getId())).thenReturn(Mono.just(order));
+        when(airspaceRepo.findById(10L)).thenReturn(Mono.just(approvedApply(10L, 1L)));
+        when(recordRepo.findOutRecord(1L, "ZY-2026-0101"))
+                .thenReturn(Mono.just(AmmoRecord.out(1L, "BL-1A", "B1", 10, "ZY-2026-0101")));
+    }
+
     @Test
     void reportFire_partialUsed_returnsRemainderViaFlowPort() {
         FireOrder order = issuedOrder(20L, 10);
-        when(orderRepo.findById(20L)).thenReturn(Mono.just(order));
-        when(recordRepo.findOutRecord(1L, "ZY-2026-0101"))
-                .thenReturn(Mono.just(AmmoRecord.out(1L, "BL-1A", "B1", 10, "ZY-2026-0101")));
+        stubReportPrerequisites(order);
         when(flowPort.reportFire(any(FireOrder.class), eq("B1")))
                 .thenAnswer(inv -> Mono.just(inv.getArgument(0)));
 
-        StepVerifier.create(orderApp.reportFire(20L, 7, null, null))
+        StepVerifier.create(orderApp.reportFire(20L, 7, IN_WINDOW_START, IN_WINDOW_END))
                 .assertNext(o -> {
                     assert o.getUsedRounds() == 7;
                     assert o.getStatus().name().equals("DONE");
@@ -288,13 +302,11 @@ class OperationFlowAppServiceTest {
     @Test
     void reportFire_allUsed_noReturnNeeded() {
         FireOrder order = issuedOrder(20L, 10);
-        when(orderRepo.findById(20L)).thenReturn(Mono.just(order));
-        when(recordRepo.findOutRecord(1L, "ZY-2026-0101"))
-                .thenReturn(Mono.just(AmmoRecord.out(1L, "BL-1A", "B1", 10, "ZY-2026-0101")));
+        stubReportPrerequisites(order);
         when(flowPort.reportFire(any(FireOrder.class), eq("B1")))
                 .thenAnswer(inv -> Mono.just(inv.getArgument(0)));
 
-        StepVerifier.create(orderApp.reportFire(20L, 10, null, null))
+        StepVerifier.create(orderApp.reportFire(20L, 10, IN_WINDOW_START, IN_WINDOW_END))
                 .assertNext(o -> {
                     assert o.getUsedRounds() == 10;
                 })
@@ -304,11 +316,9 @@ class OperationFlowAppServiceTest {
     @Test
     void reportFire_rejectsUsedOverPlan() {
         FireOrder order = issuedOrder(20L, 10);
-        when(orderRepo.findById(20L)).thenReturn(Mono.just(order));
-        when(recordRepo.findOutRecord(1L, "ZY-2026-0101"))
-                .thenReturn(Mono.just(AmmoRecord.out(1L, "BL-1A", "B1", 10, "ZY-2026-0101")));
+        stubReportPrerequisites(order);
 
-        StepVerifier.create(orderApp.reportFire(20L, 11, null, null))
+        StepVerifier.create(orderApp.reportFire(20L, 11, IN_WINDOW_START, IN_WINDOW_END))
                 .expectErrorMatches(e -> e instanceof BizException && e.getMessage().contains("超过计划发数"))
                 .verify();
         verify(flowPort, never()).reportFire(any(), any());
@@ -317,14 +327,158 @@ class OperationFlowAppServiceTest {
     @Test
     void reportFire_rejectsDoubleReport() {
         FireOrder done = issuedOrder(20L, 10);
-        done.reportFire(10, null, null);
+        done.reportFire(10, IN_WINDOW_START, IN_WINDOW_END);
         when(orderRepo.findById(20L)).thenReturn(Mono.just(done));
+        when(airspaceRepo.findById(10L)).thenReturn(Mono.just(approvedApply(10L, 1L)));
         when(recordRepo.findOutRecord(1L, "ZY-2026-0101"))
                 .thenReturn(Mono.just(AmmoRecord.out(1L, "BL-1A", "B1", 10, "ZY-2026-0101")));
 
-        StepVerifier.create(orderApp.reportFire(20L, 5, null, null))
+        StepVerifier.create(orderApp.reportFire(20L, 5, IN_WINDOW_START, IN_WINDOW_END))
                 .expectErrorMatches(e -> e instanceof BizException && e.getMessage().contains("不能重复回报"))
                 .verify();
+    }
+
+    @Test
+    void reportFire_rejectsStartBeforeAirspaceWindow() {
+        FireOrder order = issuedOrder(20L, 10);
+        stubReportPrerequisites(order);
+
+        // 空域 14:00 才开始，13:59 开打 = 起早了
+        StepVerifier.create(orderApp.reportFire(20L, 1,
+                        LocalDateTime.of(2026, 10, 1, 13, 59), IN_WINDOW_END))
+                .expectErrorMatches(e -> e instanceof BizException && e.getMessage().contains("起早了"))
+                .verify();
+        verify(flowPort, never()).reportFire(any(), any());
+    }
+
+    @Test
+    void reportFire_rejectsEndAfterAirspaceWindow() {
+        FireOrder order = issuedOrder(20L, 10);
+        stubReportPrerequisites(order);
+
+        // 空域 16:00 收尾，打到 16:01 = 拖晚了
+        StepVerifier.create(orderApp.reportFire(20L, 1,
+                        IN_WINDOW_START, LocalDateTime.of(2026, 10, 1, 16, 1)))
+                .expectErrorMatches(e -> e instanceof BizException && e.getMessage().contains("拖晚了"))
+                .verify();
+        verify(flowPort, never()).reportFire(any(), any());
+    }
+
+    @Test
+    void reportFire_boundaryTouchAllowed() {
+        FireOrder order = issuedOrder(20L, 10);
+        stubReportPrerequisites(order);
+        when(flowPort.reportFire(any(FireOrder.class), eq("B1")))
+                .thenAnswer(inv -> Mono.just(inv.getArgument(0)));
+
+        // 作业完整落在时段里：恰在 14:00 起、16:00 收（边界点允许）
+        StepVerifier.create(orderApp.reportFire(20L, 2,
+                        LocalDateTime.of(2026, 10, 1, 14, 0),
+                        LocalDateTime.of(2026, 10, 1, 16, 0)))
+                .expectNextCount(1)
+                .verifyComplete();
+    }
+
+    // ---------------- 作废 ----------------
+
+    @Test
+    void voidOrder_freshNoFire_delegatesToFlowPort() {
+        FireOrder order = issuedOrder(20L, 10);
+        when(orderRepo.findById(20L)).thenReturn(Mono.just(order));
+        when(recordRepo.findOutRecord(1L, "ZY-2026-0101"))
+                .thenReturn(Mono.just(AmmoRecord.out(1L, "BL-1A", "B1", 10, "ZY-2026-0101")));
+        when(flowPort.voidOrder(any(FireOrder.class), eq("B1")))
+                .thenAnswer(inv -> Mono.just(inv.getArgument(0)));
+
+        StepVerifier.create(orderApp.voidOrder(20L, "天气转好，收摊"))
+                .assertNext(o -> {
+                    assert o.getStatus().name().equals("VOID");
+                    assert "天气转好，收摊".equals(o.getVoidReason());
+                })
+                .verifyComplete();
+        verify(flowPort).voidOrder(org.mockito.ArgumentMatchers.argThat(
+                o -> o.getStatus().name().equals("VOID")), eq("B1"));
+    }
+
+    @Test
+    void voidOrder_alreadyVoid_returnsAsIsWithoutTouchingFlowPort() {
+        // 连点第二遍：单子已是 VOID，原样返回，绝不允许再进退弹事务（不能再退一遍弹）
+        FireOrder order = issuedOrder(20L, 10);
+        order.voidOut("收摊");
+        when(orderRepo.findById(20L)).thenReturn(Mono.just(order));
+
+        StepVerifier.create(orderApp.voidOrder(20L, "收摊"))
+                .assertNext(o -> {
+                    assert o.getStatus().name().equals("VOID");
+                    assert "收摊".equals(o.getVoidReason());
+                })
+                .verifyComplete();
+        verify(flowPort, never()).voidOrder(any(), any());
+        verify(recordRepo, never()).findOutRecord(any(), any());
+    }
+
+    @Test
+    void voidOrder_rejectsDone() {
+        FireOrder done = issuedOrder(20L, 10);
+        done.reportFire(0, IN_WINDOW_START, IN_WINDOW_END);
+        when(orderRepo.findById(20L)).thenReturn(Mono.just(done));
+
+        StepVerifier.create(orderApp.voidOrder(20L, null))
+                .expectErrorMatches(e -> e instanceof BizException && e.getMessage().contains("不能作废"))
+                .verify();
+        verify(flowPort, never()).voidOrder(any(), any());
+    }
+
+    // ---------------- 占用查法 ----------------
+
+    @Test
+    void siteDay_marksOccupiedAndEmptyHours() {
+        when(siteRepo.findById(1L)).thenReturn(Mono.just(activeSite(1L, "YY-013")));
+        // 在途单子挂的空域 09:00–11:00：09、10 两个整点格子被占，其余标空
+        OrderOccupancy occupant = new OrderOccupancy(
+                20L, "ZY-2026-0101", 10L, "KQ-2026-0101", 5L, "ZB-0007",
+                LocalDateTime.of(2026, 10, 1, 9, 0),
+                LocalDateTime.of(2026, 10, 1, 11, 0),
+                LocalDateTime.of(2026, 9, 30, 8, 0));
+        when(orderRepo.findActiveOccupancies(eq(1L),
+                eq(LocalDateTime.of(2026, 10, 1, 0, 0)),
+                eq(LocalDateTime.of(2026, 10, 2, 0, 0))))
+                .thenReturn(Mono.just(java.util.List.of(occupant)));
+
+        StepVerifier.create(orderApp.siteDay(1L, LocalDate.of(2026, 10, 1)))
+                .assertNext(day -> {
+                    assert day.slots().size() == 24;
+                    assert day.siteCode().equals("YY-013");
+                    assert !day.slots().get(8).occupied();          // 08:00 空
+                    assert "KQ-2026-0101".equals(day.slots().get(9).applyNo());
+                    assert "ZB-0007".equals(day.slots().get(9).launcherCode());
+                    assert "ZY-2026-0101".equals(day.slots().get(10).orderNo());
+                    assert !day.slots().get(11).occupied();         // 11:00–12:00 已腾出
+                    long occupiedCount = day.slots().stream().filter(OccupancySlot::occupied).count();
+                    assert occupiedCount == 2;
+                })
+                .verifyComplete();
+    }
+
+    @Test
+    void siteDay_oneMinuteOverlapStillOccupies() {
+        when(siteRepo.findById(1L)).thenReturn(Mono.just(activeSite(1L, "YY-013")));
+        // 空域 09:59–10:00，与 09:00 格子只撞一分钟，也算占
+        OrderOccupancy occupant = new OrderOccupancy(
+                20L, "ZY-2026-0101", 10L, "KQ-2026-0101", 5L, "ZB-0007",
+                LocalDateTime.of(2026, 10, 1, 9, 59),
+                LocalDateTime.of(2026, 10, 1, 10, 0),
+                LocalDateTime.of(2026, 9, 30, 8, 0));
+        when(orderRepo.findActiveOccupancies(any(), any(), any()))
+                .thenReturn(Mono.just(java.util.List.of(occupant)));
+
+        StepVerifier.create(orderApp.siteDay(1L, LocalDate.of(2026, 10, 1)))
+                .assertNext(day -> {
+                    assert day.slots().get(9).occupied();
+                    assert day.slots().get(8).occupied() == false;
+                    assert day.slots().get(10).occupied() == false; // 边界相接（10:00）不占下一格
+                })
+                .verifyComplete();
     }
 
     // ---------------- 效果 ----------------

@@ -8,6 +8,8 @@ import com.somepro.domain.hail.model.FireOrder;
 import com.somepro.domain.hail.model.Launcher;
 import com.somepro.domain.hail.model.OperationSite;
 import com.somepro.domain.shared.model.PageResult;
+import com.somepro.domain.hail.model.OccupancySlot;
+import com.somepro.domain.hail.model.SiteDayOccupancy;
 import com.somepro.interfaces.rest.hail.vo.AirspaceApplyVO;
 import com.somepro.interfaces.rest.hail.vo.AmmoRecordVO;
 import com.somepro.interfaces.rest.hail.vo.AmmoStockVO;
@@ -15,7 +17,9 @@ import com.somepro.interfaces.rest.hail.vo.EffectReportVO;
 import com.somepro.interfaces.rest.hail.vo.FireOrderVO;
 import com.somepro.interfaces.rest.hail.vo.HailPageVO;
 import com.somepro.interfaces.rest.hail.vo.LauncherVO;
+import com.somepro.interfaces.rest.hail.vo.OccupancySlotVO;
 import com.somepro.interfaces.rest.hail.vo.OperationSiteVO;
+import com.somepro.interfaces.rest.hail.vo.SiteDayOccupancyVO;
 
 import java.util.List;
 import java.util.function.Function;
@@ -61,7 +65,20 @@ public final class HailVoConverter {
         return new FireOrderVO(o.getId(), o.getOrderNo(), o.getApplyId(), o.getSiteId(),
                 o.getLauncherId(), o.getAmmoType(), o.getPlanRounds(), o.getUsedRounds(),
                 o.getStatus() == null ? null : o.getStatus().name(),
-                o.getStartTime(), o.getEndTime(), o.getCreateTime());
+                o.getStartTime(), o.getEndTime(), o.getVoidReason(), o.getCreateTime());
+    }
+
+    /** 作业点某日占用一览：领域值对象 → 对外 VO，空格子也照实带出去。 */
+    public static SiteDayOccupancyVO toVo(SiteDayOccupancy day) {
+        List<OccupancySlotVO> slots = day.slots().stream()
+                .map(HailVoConverter::toVo)
+                .collect(Collectors.toList());
+        return new SiteDayOccupancyVO(day.siteId(), day.siteCode(), day.day(), slots);
+    }
+
+    public static OccupancySlotVO toVo(OccupancySlot s) {
+        return new OccupancySlotVO(s.slotStart(), s.slotEnd(), s.occupied(),
+                s.applyNo(), s.launcherCode(), s.orderNo());
     }
 
     public static AmmoRecordVO toVo(AmmoRecord r) {

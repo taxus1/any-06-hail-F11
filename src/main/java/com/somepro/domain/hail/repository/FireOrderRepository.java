@@ -1,8 +1,12 @@
 package com.somepro.domain.hail.repository;
 
 import com.somepro.domain.hail.model.FireOrder;
+import com.somepro.domain.hail.model.OrderOccupancy;
 import com.somepro.domain.shared.model.PageResult;
 import reactor.core.publisher.Mono;
+
+import java.time.LocalDateTime;
+import java.util.List;
 
 /**
  * 作业指令仓储端口（领域层定义，基础设施层实现）。
@@ -29,4 +33,13 @@ public interface FireOrderRepository {
      * @param status 状态过滤（枚举名），null 表示不限；非法值由调用方先收敛
      */
     Mono<PageResult<FireOrder>> page(int pageNum, int pageSize, Long siteId, String status);
+
+    /**
+     * 查某作业点在给定区间内「占着时段」的在途指令（ISSUED / EXECUTING）占用投影。
+     * 时段用的是单子所挂空域的批复时段：与 [from, to) 有重叠（哪怕一分钟）就算命中。
+     * 按开单先后（create_time、id）正序返回，调用方落格时先开单的先占。
+     */
+    Mono<List<OrderOccupancy>> findActiveOccupancies(Long siteId,
+                                                     LocalDateTime from,
+                                                     LocalDateTime to);
 }

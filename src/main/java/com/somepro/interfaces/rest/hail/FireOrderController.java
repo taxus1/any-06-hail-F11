@@ -5,6 +5,7 @@ import com.somepro.common.Result;
 import com.somepro.interfaces.rest.hail.converter.HailVoConverter;
 import com.somepro.interfaces.rest.hail.vo.FireOrderIssueRequest;
 import com.somepro.interfaces.rest.hail.vo.FireOrderVO;
+import com.somepro.interfaces.rest.hail.vo.FireOrderVoidRequest;
 import com.somepro.interfaces.rest.hail.vo.FireReportRequest;
 import com.somepro.interfaces.rest.hail.vo.HailPageVO;
 import jakarta.validation.Valid;
@@ -20,10 +21,13 @@ import reactor.core.publisher.Mono;
 /**
  * 作业指令接口（用户接口层）。
  *
- * - POST /api/hail/orders                下达指令（只有已批空域能开；开单即划弹并记 OUT 流水）
- * - POST /api/hail/orders/{id}/report    作业回报（实际发数；没打完的退回结存并记 RETURN）
- * - GET  /api/hail/orders/{id}           按 id 看单条
- * - GET  /api/hail/orders                分页翻看，可按作业点 / 状态过滤
+ * - POST /api/hail/orders                 下达指令（只有已批空域能开；开单即划弹并记 OUT 流水）
+ * - POST /api/hail/orders/{id}/report     作业回报（实际发数；没打完的退回结存并记 RETURN）
+ * - POST /api/hail/orders/{id}/void       收摊作废（一发没打才能作废；原弹退回，幂等可连点）
+ * - GET  /api/hail/orders/{id}            按 id 看单条
+ * - GET  /api/hail/orders                 分页翻看，可按作业点 / 状态过滤
+ *
+ * 占用查法（作业点某日每小时被哪张空域 / 哪台装备占着）见 {@link OccupancyController}。
  */
 @RestController
 @RequestMapping("/api/hail/orders")
@@ -47,6 +51,15 @@ public class FireOrderController {
     public Mono<Result<FireOrderVO>> report(@PathVariable Long id,
                                             @Valid @RequestBody FireReportRequest req) {
         return appService.reportFire(id, req.usedRounds(), req.startTime(), req.endTime())
+                .map(HailVoConverter::toVo)
+                .map(Result::ok);
+    }
+
+    @PostMapping("/{id}/void")
+    public Mono<Result<FireOrderVO>> voidOrder(@PathVariable Long id,
+                                               @RequestBody(required = false) FireOrderVoidRequest req) {
+        String reason = req == null ? null : req.reason();
+        return appService.voidOrder(id, reason)
                 .map(HailVoConverter::toVo)
                 .map(Result::ok);
     }

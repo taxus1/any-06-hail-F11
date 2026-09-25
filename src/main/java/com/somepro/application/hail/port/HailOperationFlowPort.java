@@ -42,6 +42,19 @@ public interface HailOperationFlowPort {
     Mono<FireOrder> reportFire(FireOrder order, String batchNo);
 
     /**
+     * 作废事务（一发都没打的单子收摊）：指令已由领域行为置 VOID ——
+     * 条件更新（只有 ISSUED / EXECUTING 且 used_rounds=0 的单子更新得动）成功后，
+     * 才把开单划走的计划发数原封加回结存并记一笔 RETURN → 装备回待命（腾出装备与所占空域时段）。
+     *
+     * 条件更新 0 行说明单子已经被并发作废 / 已回报：整笔回滚、退弹绝不发生（作废幂等由它兜底；
+     * 调用方在应用层已先判断 VOID 直返，这里只处理「真的作废」与并发竞争）。
+     *
+     * @param order   已由领域行为置为 VOID（带作废原因）的指令
+     * @param batchNo 当初领用的批次（从该指令 OUT 流水上取）
+     */
+    Mono<FireOrder> voidOrder(FireOrder order, String batchNo);
+
+    /**
      * 效果上报事务：插入效果上报（一条指令一份，uk_order 兜底，冲突抛 DuplicateKeyException）。
      */
     Mono<EffectReport> submitReport(EffectReport report);

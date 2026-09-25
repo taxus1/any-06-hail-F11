@@ -17,5 +17,6 @@ public record FireOrderVO(Long id,
                           String status,
                           LocalDateTime startTime,
                           LocalDateTime endTime,
+                          String voidReason,
                           LocalDateTime createTime) implements Serializable {
 }

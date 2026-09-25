@@ -2,12 +2,14 @@ package com.somepro.infrastructure.persistence.hail;
 
 import com.baomidou.mybatisplus.core.mapper.BaseMapper;
 import com.somepro.infrastructure.persistence.hail.po.FireOrderPO;
+import com.somepro.infrastructure.persistence.hail.po.OrderOccupancyPO;
 import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;
 import org.apache.ibatis.annotations.Select;
 import org.apache.ibatis.annotations.Update;
 
 import java.time.LocalDateTime;
+import java.util.List;
 
 /**
  * 作业指令 Mapper（基础设施层）。
@@ -38,4 +40,55 @@ public interface FireOrderMapper extends BaseMapper<FireOrderPO> {
                        @Param("endTime") LocalDateTime endTime,
                        @Param("operator") String operator,
                        @Param("now") LocalDateTime now);
+
+    /**
+     * 开单冲突排查（调用方必须已先锁住作业点行，把同点并发开单串行化）：
+     * 查该作业点所有没完结（ISSUED / EXECUTING）单子里，所占空域时段与 [winStart, winEnd) 有重叠、
+     * 或挂在同一条空域申请上的单子，按开单先后（create_time、id）取最早的一张。
+     * 时段用空域批复时段（join t_airspace_apply）：哪怕只撞一分钟也算撞；
+     * 同一条空域申请即使时段不撞也返回（一张空域同时只允许一张没打完的单子在外面）。
+     */
+    @Select("SELECT o.* FROM t_fire_order o "
+            + "JOIN t_airspace_apply a ON a.id = o.apply_id AND a.del_flag = 0 "
+            + "WHERE o.site_id = #{siteId} AND o.del_flag = 0 "
+            + "AND o.status IN ('ISSUED', 'EXECUTING') "
+            + "AND (o.apply_id = #{applyId} "
+            + "     OR (a.plan_start < #{winEnd} AND a.plan_end > #{winStart})) "
+            + "ORDER BY o.create_time ASC, o.id ASC LIMIT 1")
+    FireOrderPO selectOpenBlocker(@Param("siteId") Long siteId,
+                                  @Param("applyId") Long applyId,
+                                  @Param("winStart") LocalDateTime winStart,
+                                  @Param("winEnd") LocalDateTime winEnd);
+
+    /**
+     * 条件作废：只有没完结（ISSUED / EXECUTING）且一发都没打（used_rounds = 0）的单子更新得动。
+     * 返回 1 = 本次真的作废（调用方接着退弹、腾装备）；0 = 已作废 / 已回报 / 已打过弹，
+     * 调用方整笔回滚，退弹绝不发生 —— 连点两遍作废也只能退一次弹。
+     */
+    @Update("UPDATE t_fire_order SET status = 'VOID', void_reason = #{reason}, "
+            + "update_by = #{operator}, update_time = #{now} "
+            + "WHERE id = #{id} AND status IN ('ISSUED', 'EXECUTING') "
+            + "AND used_rounds = 0 AND del_flag = 0")
+    int voidIfFresh(@Param("id") Long id,
+                    @Param("reason") String reason,
+                    @Param("operator") String operator,
+                    @Param("now") LocalDateTime now);
+
+    /**
+     * 占用查法：某作业点与 [dayStart, nextDayStart) 有交集的在途单子（ISSUED / EXECUTING），
+     * 带上所挂空域编号 / 批复时段与装备编号，按开单先后正序（先开单的先占格）。
+     */
+    @Select("SELECT o.id AS order_id, o.order_no AS order_no, o.apply_id AS apply_id, "
+            + "a.apply_no AS apply_no, o.launcher_id AS launcher_id, l.launcher_code AS launcher_code, "
+            + "a.plan_start AS window_start, a.plan_end AS window_end, o.create_time AS order_create_time "
+            + "FROM t_fire_order o "
+            + "JOIN t_airspace_apply a ON a.id = o.apply_id AND a.del_flag = 0 "
+            + "LEFT JOIN t_launcher l ON l.id = o.launcher_id AND l.del_flag = 0 "
+            + "WHERE o.site_id = #{siteId} AND o.del_flag = 0 "
+            + "AND o.status IN ('ISSUED', 'EXECUTING') "
+            + "AND a.plan_start < #{dayEnd} AND a.plan_end > #{dayStart} "
+            + "ORDER BY o.create_time ASC, o.id ASC")
+    List<OrderOccupancyPO> selectActiveOccupancies(@Param("siteId") Long siteId,
+                                                   @Param("dayStart") LocalDateTime dayStart,
+                                                   @Param("dayEnd") LocalDateTime dayEnd);
 }
