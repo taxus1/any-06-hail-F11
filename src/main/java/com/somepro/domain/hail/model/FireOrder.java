@@ -15,11 +15,15 @@ import java.time.LocalDateTime;
  * 关键不变量与流转规则：
  * - 指令编号（orderNo，如 ZY-2026-0101）全局唯一且非空，库表 uk_order_no 兜底。
  * - 必须挂在一条 APPROVED 的空域申请上；作业点、装备、弹型、计划发数在开单时定死。
+ * - 开单即带作业时段（落在 startTime/endTime 列）：时段必须完整落在空域批复时段里头
+ *   （应用层与事务层双重校验）；同一作业点、同一空域下的时段占用规则也在开单时卡死。
  * - 计划发数必须为正；装备归属作业点要与指令作业点一致（跨聚合校验在应用层）。
  * - 开单时弹药已从结存划走（OUT 领用流水在同一事务里记账），
  *   所以指令上的计划发数不允许再改。
  * - 回报实际发数：0 ≤ used ≤ plan；没用完的（plan - used）由应用层退回结存（RETURN 流水），
- *   回报后指令置 DONE，一条指令只能回报一次。
+ *   回报后指令置 DONE（startTime/endTime 改写为实际时刻），一条指令只能回报一次。
+ * - 没打完的单子（ISSUED / EXECUTING）可以作废：计划发数原封退回结存（RETURN 流水），
+ *   装备与时段一并腾出；已 DONE 的不能作废；重复作废由应用层幂等短路 + 条件更新兜底。
  *
  * 注意：批次号不在本表（表上没有该列），领用批次记在 t_ammo_record 的 OUT 流水上。
  */
@@ -53,18 +57,19 @@ public class FireOrder extends BaseEntity {
     /** ISSUED 已下达 / EXECUTING 作业中 / DONE 已完成 / VOID 已作废。 */
     private OrderStatus status;
 
-    /** 实际作业开始时刻。 */
+    /** 实际作业开始时刻（开单时先落计划开始时刻，回报时改写为实际）。 */
     private LocalDateTime startTime;
 
-    /** 实际作业结束时刻。 */
+    /** 实际作业结束时刻（开单时先落计划结束时刻，回报时改写为实际）。 */
     private LocalDateTime endTime;
 
     /** 作废原因。 */
     private String voidReason;
 
-    /** 工厂方法：下达一条新作业指令，初始 ISSUED，实际发数为 0。 */
+    /** 工厂方法：下达一条新作业指令，初始 ISSUED，实际发数为 0，作业时段随单定死。 */
     public static FireOrder issue(String orderNo, Long applyId, Long siteId, Long launcherId,
-                                  String ammoType, int planRounds) {
+                                  String ammoType, int planRounds,
+                                  LocalDateTime planStart, LocalDateTime planEnd) {
         FireOrder order = new FireOrder();
         order.changeNo(orderNo);
         order.linkApply(applyId);
@@ -72,6 +77,7 @@ public class FireOrder extends BaseEntity {
         order.useLauncher(launcherId);
         order.specifyAmmoType(ammoType);
         order.specifyPlanRounds(planRounds);
+        order.planWindow(planStart, planEnd);
         order.usedRounds = 0;
         order.status = OrderStatus.ISSUED;
         return order;
@@ -107,6 +113,31 @@ public class FireOrder extends BaseEntity {
         this.endTime = endTime;
         this.status = OrderStatus.DONE;
         return returned;
+    }
+
+    /**
+     * 领域行为：作废一张发都没打的单子。
+     *
+     * 只有没打完的（ISSUED / EXECUTING）能作废；作废后计划发数由应用层原封退回结存，
+     * 装备与时段一并腾出。已 VOID 的重复作废由应用层幂等短路，走到这里属异常。
+     */
+    public void voidOrder(String reason) {
+        if (status == OrderStatus.DONE) {
+            throw new BizException("指令已完成回报，不能作废：" + orderNo);
+        }
+        if (status == OrderStatus.VOID) {
+            throw new BizException("指令已是作废状态，不要重复作废：" + orderNo);
+        }
+        if (reason == null || reason.isBlank()) {
+            throw new BizException("作废必须写明原因");
+        }
+        this.status = OrderStatus.VOID;
+        this.voidReason = reason.trim();
+    }
+
+    /** 没打完、还占着空域时段与装备。 */
+    public boolean isOpen() {
+        return status != null && status.isOpen();
     }
 
     public void changeNo(String orderNo) {
@@ -149,5 +180,17 @@ public class FireOrder extends BaseEntity {
             throw new BizException("计划用弹发数必须为正整数");
         }
         this.planRounds = planRounds;
+    }
+
+    /** 开单定下的作业时段：结束必须晚于开始；是否落在空域批复时段内由应用层校验。 */
+    public void planWindow(LocalDateTime planStart, LocalDateTime planEnd) {
+        if (planStart == null || planEnd == null) {
+            throw new BizException("作业起止时刻不能为空");
+        }
+        if (!planEnd.isAfter(planStart)) {
+            throw new BizException("作业结束时刻必须晚于开始时刻");
+        }
+        this.startTime = planStart;
+        this.endTime = planEnd;
     }
 }

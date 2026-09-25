@@ -22,4 +22,12 @@ public interface OperationSiteMapper extends BaseMapper<OperationSitePO> {
      */
     @Select("SELECT * FROM t_operation_site WHERE site_code = #{siteCode} AND del_flag = 0 LIMIT 1")
     OperationSitePO selectByCode(@Param("siteCode") String siteCode);
+
+    /**
+     * 按 id 查并加行锁（SELECT ... FOR UPDATE），必须在事务里调用。
+     * 开单事务第一步先锁住作业点：同一作业点的开单因此串行，
+     * 「两个人同一瞬间抢同一段时辰」只成一家。
+     */
+    @Select("SELECT * FROM t_operation_site WHERE id = #{id} AND del_flag = 0 FOR UPDATE")
+    OperationSitePO selectForUpdate(@Param("id") Long id);
 }

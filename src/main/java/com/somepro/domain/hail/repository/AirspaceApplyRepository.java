@@ -4,6 +4,9 @@ import com.somepro.domain.hail.model.AirspaceApply;
 import com.somepro.domain.shared.model.PageResult;
 import reactor.core.publisher.Mono;
 
+import java.util.Collection;
+import java.util.List;
+
 /**
  * 空域申请仓储端口（领域层定义，基础设施层实现）。
  *
@@ -17,6 +20,9 @@ public interface AirspaceApplyRepository {
     Mono<AirspaceApply> findById(Long id);
 
     Mono<AirspaceApply> findByNo(String applyNo);
+
+    /** 按 id 批量查（占用投影拼装用）；空集合进、空列表出，不走库。 */
+    Mono<List<AirspaceApply>> findByIds(Collection<Long> ids);
 
     /** 生成某年的下一个申请编号（KQ-yyyy-NNNN），查当年最大序号 +1。 */
     Mono<String> nextApplyNo(int year);

@@ -13,6 +13,7 @@ import com.somepro.infrastructure.persistence.support.BlockingRepositorySupport;
 import org.springframework.stereotype.Repository;
 import reactor.core.publisher.Mono;
 
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.stream.Collectors;
 
@@ -62,6 +63,29 @@ public class FireOrderRepositoryImpl extends BlockingRepositorySupport implement
                     Wrappers.<FireOrderPO>lambdaQuery().eq(FireOrderPO::getOrderNo, orderNo));
             return po == null ? null : FireOrderPoConverter.toDomain(po);
         });
+    }
+
+    @Override
+    public Mono<FireOrder> findOpenByApplyId(Long applyId) {
+        return blocking(() -> {
+            FireOrderPO po = mapper.selectOpenByApplyId(applyId);
+            return po == null ? null : FireOrderPoConverter.toDomain(po);
+        });
+    }
+
+    @Override
+    public Mono<FireOrder> findFirstOverlappingOpen(Long siteId, LocalDateTime start, LocalDateTime end) {
+        return blocking(() -> {
+            FireOrderPO po = mapper.selectFirstOverlappingOpen(siteId, start, end);
+            return po == null ? null : FireOrderPoConverter.toDomain(po);
+        });
+    }
+
+    @Override
+    public Mono<List<FireOrder>> findOccupying(Long siteId, LocalDateTime from, LocalDateTime to) {
+        return blocking(() -> mapper.selectOccupying(siteId, from, to).stream()
+                .map(FireOrderPoConverter::toDomain)
+                .collect(Collectors.toList()));
     }
 
     @Override

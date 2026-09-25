@@ -6,11 +6,13 @@ import jakarta.validation.constraints.Positive;
 import jakarta.validation.constraints.Size;
 
 import java.io.Serializable;
+import java.time.LocalDateTime;
 
 /**
  * 下达作业指令请求体（用户接口层，不可变 record）。
  *
- * 记上：哪条已批空域、用哪台装备、打什么弹型、从哪个批次出、计划打几发。
+ * 记上：哪条已批空域、用哪台装备、打什么弹型、从哪个批次出、计划打几发、哪段时辰打。
+ * 作业时段必须完整落在空域批复的时段里头，起早了、拖晚了都开不出去。
  * 指令编号由后端按年分配；开单即从结存划走计划发数并记 OUT 领用流水。
  */
 public record FireOrderIssueRequest(
@@ -30,5 +32,11 @@ public record FireOrderIssueRequest(
 
         @NotNull(message = "计划用弹发数不能为空")
         @Positive(message = "计划用弹发数必须为正整数")
-        Integer planRounds) implements Serializable {
+        Integer planRounds,
+
+        @NotNull(message = "作业开始时刻不能为空")
+        LocalDateTime planStart,
+
+        @NotNull(message = "作业结束时刻不能为空")
+        LocalDateTime planEnd) implements Serializable {
 }

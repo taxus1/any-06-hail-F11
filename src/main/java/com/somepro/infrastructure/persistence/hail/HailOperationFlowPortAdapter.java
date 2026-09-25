@@ -36,6 +36,11 @@ public class HailOperationFlowPortAdapter extends BlockingRepositorySupport
     }
 
     @Override
+    public Mono<FireOrder> voidOrder(FireOrder order, String batchNo) {
+        return blocking(() -> executor.doVoidOrder(order, batchNo));
+    }
+
+    @Override
     public Mono<FireOrder> reportFire(FireOrder order, String batchNo) {
         return blocking(() -> {
             int returned = order.getPlanRounds() - order.getUsedRounds();

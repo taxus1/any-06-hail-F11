@@ -9,6 +9,7 @@ import com.somepro.domain.hail.model.EffectReport;
 import com.somepro.domain.hail.model.FireOrder;
 import com.somepro.domain.hail.model.Launcher;
 import com.somepro.domain.hail.model.OperationSite;
+import com.somepro.domain.hail.model.SiteHourSlot;
 import org.junit.jupiter.api.Test;
 import org.springframework.dao.DuplicateKeyException;
 import reactor.core.publisher.Mono;
@@ -20,8 +21,10 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
+import java.util.List;
 
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -29,13 +32,22 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
- * 作业主线四块用例的应用层单测：空域申报批复、开单划弹、回报退弹、效果上报。
+ * 作业主线用例的应用层单测：空域申报批复、开单划弹（时段边界 / 一空域一单 / 撞车）、
+ * 回报退弹、作废收摊、按日占用、效果上报。
  * 不连库、不起 Spring，用 Mockito 顶掉仓储 / 事务端口，专测编排与跨聚合规则。
  */
 class OperationFlowAppServiceTest {
 
     private static final Clock FIXED = Clock.fixed(
             Instant.parse("2026-09-24T08:00:00Z"), ZoneId.of("Asia/Shanghai"));
+
+    /** 批复的空域窗口：2026-10-01 14:00 ~ 16:00（见 pendingApply）。 */
+    private static final LocalDateTime APPLY_START = LocalDateTime.of(2026, 10, 1, 14, 0);
+    private static final LocalDateTime APPLY_END = LocalDateTime.of(2026, 10, 1, 16, 0);
+
+    /** 开单用的作业时段：完整落在批复窗口内。 */
+    private static final LocalDateTime PLAN_START = LocalDateTime.of(2026, 10, 1, 14, 0);
+    private static final LocalDateTime PLAN_END = LocalDateTime.of(2026, 10, 1, 15, 0);
 
     private final AirspaceApplyRepositoryPort airspaceRepo = mock(AirspaceApplyRepositoryPort.class);
     private final FireOrderRepositoryPort orderRepo = mock(FireOrderRepositoryPort.class);
@@ -162,8 +174,43 @@ class OperationFlowAppServiceTest {
     void issueOrder_rejectsPendingAirspace() {
         when(airspaceRepo.findById(10L)).thenReturn(Mono.just(pendingApply(10L, 1L)));
 
-        StepVerifier.create(orderApp.issue(10L, 5L, "BL-1A", "B1", 10))
+        StepVerifier.create(orderApp.issue(10L, 5L, "BL-1A", "B1", 10, PLAN_START, PLAN_END))
                 .expectErrorMatches(e -> e instanceof BizException && e.getMessage().contains("已批"))
+                .verify();
+        verify(flowPort, never()).issueOrder(any(), any());
+    }
+
+    @Test
+    void issueOrder_rejectsPlanStartingBeforeApplyWindow() {
+        when(airspaceRepo.findById(10L)).thenReturn(Mono.just(approvedApply(10L, 1L)));
+
+        // 批复 14:00 才开始，13:59 就想开：起早了
+        StepVerifier.create(orderApp.issue(10L, 5L, "BL-1A", "B1", 10,
+                        LocalDateTime.of(2026, 10, 1, 13, 59), PLAN_END))
+                .expectErrorMatches(e -> e instanceof BizException
+                        && e.getMessage().contains("起早了、拖晚了都不行"))
+                .verify();
+        verify(flowPort, never()).issueOrder(any(), any());
+    }
+
+    @Test
+    void issueOrder_rejectsPlanEndingAfterApplyWindow() {
+        when(airspaceRepo.findById(10L)).thenReturn(Mono.just(approvedApply(10L, 1L)));
+
+        // 批复 16:00 就结束，拖到 16:01：拖晚了
+        StepVerifier.create(orderApp.issue(10L, 5L, "BL-1A", "B1", 10,
+                        PLAN_START, LocalDateTime.of(2026, 10, 1, 16, 1)))
+                .expectErrorMatches(e -> e instanceof BizException
+                        && e.getMessage().contains("起早了、拖晚了都不行"))
+                .verify();
+        verify(flowPort, never()).issueOrder(any(), any());
+    }
+
+    @Test
+    void issueOrder_rejectsPlanEndNotAfterStart() {
+        StepVerifier.create(orderApp.issue(10L, 5L, "BL-1A", "B1", 10, PLAN_START, PLAN_START))
+                .expectErrorMatches(e -> e instanceof BizException
+                        && e.getMessage().contains("晚于开始时刻"))
                 .verify();
         verify(flowPort, never()).issueOrder(any(), any());
     }
@@ -176,7 +223,7 @@ class OperationFlowAppServiceTest {
         other.setId(5L);
         when(launcherRepo.findById(5L)).thenReturn(Mono.just(other));
 
-        StepVerifier.create(orderApp.issue(10L, 5L, "BL-1A", "B1", 10))
+        StepVerifier.create(orderApp.issue(10L, 5L, "BL-1A", "B1", 10, PLAN_START, PLAN_END))
                 .expectErrorMatches(e -> e instanceof BizException && e.getMessage().contains("不归属"))
                 .verify();
         verify(flowPort, never()).issueOrder(any(), any());
@@ -190,7 +237,8 @@ class OperationFlowAppServiceTest {
         busy.setId(5L);
         when(launcherRepo.findById(5L)).thenReturn(Mono.just(busy));
 
-        StepVerifier.create(orderApp.issue(10L, 5L, "BL-1A", "B1", 10))
+        // 装备被没完结的单子用着，就算时段不撞也不能再点它
+        StepVerifier.create(orderApp.issue(10L, 5L, "BL-1A", "B1", 10, PLAN_START, PLAN_END))
                 .expectErrorMatches(e -> e instanceof BizException && e.getMessage().contains("待命"))
                 .verify();
     }
@@ -201,7 +249,7 @@ class OperationFlowAppServiceTest {
         when(stockRepo.findUnique(1L, "BL-1A", "B1")).thenReturn(Mono.just(
                 AmmoStock.newStock(1L, "BL-1A", "B1", 8, null, LocalDate.of(2028, 1, 1))));
 
-        StepVerifier.create(orderApp.issue(10L, 5L, "BL-1A", "B1", 10))
+        StepVerifier.create(orderApp.issue(10L, 5L, "BL-1A", "B1", 10, PLAN_START, PLAN_END))
                 .expectErrorMatches(e -> e instanceof BizException && e.getMessage().contains("结存不足"))
                 .verify();
         verify(flowPort, never()).issueOrder(any(), any());
@@ -213,27 +261,56 @@ class OperationFlowAppServiceTest {
         when(stockRepo.findUnique(1L, "BL-1A", "B1")).thenReturn(Mono.just(
                 AmmoStock.newStock(1L, "BL-1A", "B1", 100, null, LocalDate.of(2026, 9, 1))));
 
-        StepVerifier.create(orderApp.issue(10L, 5L, "BL-1A", "B1", 10))
+        StepVerifier.create(orderApp.issue(10L, 5L, "BL-1A", "B1", 10, PLAN_START, PLAN_END))
                 .expectErrorMatches(e -> e instanceof BizException && e.getMessage().contains("过有效期"))
                 .verify();
     }
 
     @Test
+    void issueOrder_rejectsWhenApplyAlreadyHasOpenOrder() {
+        prepareIssuePrerequisitesWithStock();
+        // 同一空域下已有一张没打完的单子：不许拆出第二张
+        when(orderRepo.findOpenByApplyId(10L)).thenReturn(Mono.just(issuedOrder(30L, 5)));
+
+        StepVerifier.create(orderApp.issue(10L, 5L, "BL-1A", "B1", 10, PLAN_START, PLAN_END))
+                .expectErrorMatches(e -> e instanceof BizException
+                        && e.getMessage().contains("一张空域")
+                        && e.getMessage().contains("ZY-2026-0101"))
+                .verify();
+        verify(flowPort, never()).issueOrder(any(), any());
+    }
+
+    @Test
+    void issueOrder_rejectsOverlappingSlot_andNamesConflict() {
+        prepareIssuePrerequisitesWithStock();
+        // 另一张先开出的单子占着 14:00~15:00，哪怕只撞一分钟也挡回，并报出撞的是哪一张
+        when(orderRepo.findFirstOverlappingOpen(eq(1L), eq(PLAN_START), eq(PLAN_END)))
+                .thenReturn(Mono.just(issuedOrder(31L, 5)));
+
+        StepVerifier.create(orderApp.issue(10L, 5L, "BL-1A", "B1", 10, PLAN_START, PLAN_END))
+                .expectErrorMatches(e -> e instanceof BizException
+                        && e.getMessage().contains("ZY-2026-0101")
+                        && e.getMessage().contains("占住"))
+                .verify();
+        verify(flowPort, never()).issueOrder(any(), any());
+    }
+
+    @Test
     void issueOrder_success_goesThroughFlowPortWithOrderNo() {
-        prepareIssuePrerequisites();
-        when(stockRepo.findUnique(1L, "BL-1A", "B1")).thenReturn(Mono.just(
-                AmmoStock.newStock(1L, "BL-1A", "B1", 100, null, LocalDate.of(2028, 1, 1))));
+        prepareIssuePrerequisitesWithStock();
         when(orderRepo.nextOrderNo(2026)).thenReturn(Mono.just("ZY-2026-0101"));
         when(flowPort.issueOrder(any(FireOrder.class), eq("B1")))
                 .thenAnswer(inv -> Mono.just(inv.getArgument(0)));
 
-        StepVerifier.create(orderApp.issue(10L, 5L, "BL-1A", "B1", 10))
+        StepVerifier.create(orderApp.issue(10L, 5L, "BL-1A", "B1", 10, PLAN_START, PLAN_END))
                 .assertNext(o -> {
                     assert "ZY-2026-0101".equals(o.getOrderNo());
                     assert o.getPlanRounds() == 10;
                     assert o.getUsedRounds() == 0;
                     assert o.getStatus().name().equals("ISSUED");
                     assert o.getApplyId() == 10L && o.getSiteId() == 1L && o.getLauncherId() == 5L;
+                    // 作业时段随单定死，开单即占住这段时辰
+                    assert PLAN_START.equals(o.getStartTime()) && PLAN_END.equals(o.getEndTime());
                 })
                 .verifyComplete();
         verify(flowPort).issueOrder(org.mockito.ArgumentMatchers.argThat(
@@ -242,9 +319,7 @@ class OperationFlowAppServiceTest {
 
     @Test
     void issueOrder_retriesNoOnDuplicate() {
-        prepareIssuePrerequisites();
-        when(stockRepo.findUnique(1L, "BL-1A", "B1")).thenReturn(Mono.just(
-                AmmoStock.newStock(1L, "BL-1A", "B1", 100, null, LocalDate.of(2028, 1, 1))));
+        prepareIssuePrerequisitesWithStock();
         when(orderRepo.nextOrderNo(2026))
                 .thenReturn(Mono.just("ZY-2026-0001"), Mono.just("ZY-2026-0002"));
         when(flowPort.issueOrder(any(FireOrder.class), eq("B1"))).thenAnswer(inv -> {
@@ -255,7 +330,7 @@ class OperationFlowAppServiceTest {
             return Mono.just(o);
         });
 
-        StepVerifier.create(orderApp.issue(10L, 5L, "BL-1A", "B1", 10))
+        StepVerifier.create(orderApp.issue(10L, 5L, "BL-1A", "B1", 10, PLAN_START, PLAN_END))
                 .assertNext(o -> {
                     assert "ZY-2026-0002".equals(o.getOrderNo());
                 })
@@ -327,6 +402,136 @@ class OperationFlowAppServiceTest {
                 .verify();
     }
 
+    // ---------------- 作废 ----------------
+
+    @Test
+    void voidOrder_success_returnsFullPlanViaFlowPort() {
+        FireOrder order = issuedOrder(20L, 10);
+        when(orderRepo.findById(20L)).thenReturn(Mono.just(order));
+        when(recordRepo.findOutRecord(1L, "ZY-2026-0101"))
+                .thenReturn(Mono.just(AmmoRecord.out(1L, "BL-1A", "B1", 10, "ZY-2026-0101")));
+        when(flowPort.voidOrder(any(FireOrder.class), eq("B1")))
+                .thenAnswer(inv -> Mono.just(inv.getArgument(0)));
+
+        StepVerifier.create(orderApp.voidOrder(20L, "云系过境，打不成"))
+                .assertNext(o -> {
+                    assert o.getStatus().name().equals("VOID");
+                    assert "云系过境，打不成".equals(o.getVoidReason());
+                    // 一发没打，计划 10 发由事务层原封退回结存
+                    assert o.getPlanRounds() == 10 && o.getUsedRounds() == 0;
+                })
+                .verifyComplete();
+        verify(flowPort).voidOrder(org.mockito.ArgumentMatchers.argThat(
+                o -> o.getStatus().name().equals("VOID") && o.getPlanRounds() == 10), eq("B1"));
+    }
+
+    @Test
+    void voidOrder_rejectsDoneOrder() {
+        FireOrder done = issuedOrder(20L, 10);
+        done.reportFire(10, null, null);
+        when(orderRepo.findById(20L)).thenReturn(Mono.just(done));
+
+        StepVerifier.create(orderApp.voidOrder(20L, "想反悔"))
+                .expectErrorMatches(e -> e instanceof BizException && e.getMessage().contains("不能作废"))
+                .verify();
+        verify(flowPort, never()).voidOrder(any(), any());
+    }
+
+    @Test
+    void voidOrder_requiresReason() {
+        FireOrder order = issuedOrder(20L, 10);
+        when(orderRepo.findById(20L)).thenReturn(Mono.just(order));
+
+        StepVerifier.create(orderApp.voidOrder(20L, "  "))
+                .expectErrorMatches(e -> e instanceof BizException
+                        && e.getMessage().contains("作废必须写明原因"))
+                .verify();
+        verify(flowPort, never()).voidOrder(any(), any());
+    }
+
+    @Test
+    void voidOrder_secondClickReturnsSameWithoutRefundingAgain() {
+        // 已作废的单子再点一遍：原样退回，绝不再走事务退一遍弹
+        FireOrder voided = issuedOrder(20L, 10);
+        voided.voidOrder("云系过境，打不成");
+        when(orderRepo.findById(20L)).thenReturn(Mono.just(voided));
+
+        StepVerifier.create(orderApp.voidOrder(20L, "再点一遍"))
+                .assertNext(o -> {
+                    assert o.getStatus().name().equals("VOID");
+                    // 原样退回：原因还是第一次作废时记下的那条
+                    assert "云系过境，打不成".equals(o.getVoidReason());
+                })
+                .verifyComplete();
+        verify(flowPort, never()).voidOrder(any(), any());
+    }
+
+    // ---------------- 按日占用 ----------------
+
+    @Test
+    void dailyOccupancy_marksOccupiedAndEmptyHours() {
+        when(siteRepo.findById(1L)).thenReturn(Mono.just(activeSite(1L, "YY-013")));
+        // 开着的单占计划时段 14:00~15:00；打完的单占实际时段 9:00~10:30
+        FireOrder open = issuedOrder(20L, 10);
+        FireOrder done = issuedOrder(21L, 8);
+        done.setOrderNo("ZY-2026-0099");
+        done.reportFire(8, LocalDateTime.of(2026, 10, 1, 9, 0),
+                LocalDateTime.of(2026, 10, 1, 10, 30));
+        when(orderRepo.findOccupying(eq(1L), any(), any()))
+                .thenReturn(Mono.just(List.of(open, done)));
+        when(airspaceRepo.findByIds(any())).thenReturn(Mono.just(List.of(approvedApply(10L, 1L))));
+        Launcher launcher = Launcher.register("ZB-0007", 1L, "QF-12", 12, "IN_USE", null);
+        launcher.setId(5L);
+        when(launcherRepo.findByIds(any())).thenReturn(Mono.just(List.of(launcher)));
+
+        StepVerifier.create(orderApp.dailyOccupancy(1L, LocalDate.of(2026, 10, 1)))
+                .assertNext(slots -> {
+                    assert slots.size() == 24;
+                    // 没占上的钟头标空
+                    assert !slots.get(0).occupied() && slots.get(0).occupants().isEmpty();
+                    // 9 点、10 点被打完的单占着（实际时段 9:00~10:30）
+                    assert slots.get(9).occupied();
+                    assert "ZY-2026-0099".equals(slots.get(9).occupants().get(0).orderNo());
+                    assert slots.get(10).occupied();
+                    // 11 点起那段就腾出来了
+                    assert !slots.get(11).occupied();
+                    // 14 点被开着的单占着，空域、装备都指得出来
+                    assert slots.get(14).occupied();
+                    assert "ZY-2026-0101".equals(slots.get(14).occupants().get(0).orderNo());
+                    assert "KQ-2026-0101".equals(slots.get(14).occupants().get(0).applyNo());
+                    assert "ZB-0007".equals(slots.get(14).occupants().get(0).launcherCode());
+                    // 15 点整单子结束，首尾相接不占下一槽
+                    assert !slots.get(15).occupied();
+                })
+                .verifyComplete();
+    }
+
+    @Test
+    void dailyOccupancy_allEmptyWhenNoOrdersThatDay() {
+        when(siteRepo.findById(1L)).thenReturn(Mono.just(activeSite(1L, "YY-013")));
+        when(orderRepo.findOccupying(eq(1L), any(), any())).thenReturn(Mono.just(List.of()));
+
+        StepVerifier.create(orderApp.dailyOccupancy(1L, LocalDate.of(2026, 10, 1)))
+                .assertNext(slots -> {
+                    assert slots.size() == 24;
+                    assert slots.stream().noneMatch(SiteHourSlot::occupied);
+                })
+                .verifyComplete();
+        // 没有占用就不必再查空域与装备
+        verify(airspaceRepo, never()).findByIds(any());
+        verify(launcherRepo, never()).findByIds(any());
+    }
+
+    @Test
+    void dailyOccupancy_rejectsUnknownSite() {
+        when(siteRepo.findById(99L)).thenReturn(Mono.empty());
+
+        StepVerifier.create(orderApp.dailyOccupancy(99L, LocalDate.of(2026, 10, 1)))
+                .expectErrorMatches(e -> e instanceof BizException
+                        && e.getMessage().contains("作业点不存在"))
+                .verify();
+    }
+
     // ---------------- 效果 ----------------
 
     @Test
@@ -390,6 +595,15 @@ class OperationFlowAppServiceTest {
         when(launcherRepo.findById(5L)).thenReturn(Mono.just(ready));
     }
 
+    /** 开单前置全备好：库存够、空域下没有未完结单、同点时段不撞车。 */
+    private void prepareIssuePrerequisitesWithStock() {
+        prepareIssuePrerequisites();
+        when(stockRepo.findUnique(1L, "BL-1A", "B1")).thenReturn(Mono.just(
+                AmmoStock.newStock(1L, "BL-1A", "B1", 100, null, LocalDate.of(2028, 1, 1))));
+        when(orderRepo.findOpenByApplyId(anyLong())).thenReturn(Mono.empty());
+        when(orderRepo.findFirstOverlappingOpen(anyLong(), any(), any())).thenReturn(Mono.empty());
+    }
+
     private OperationSite activeSite(Long id, String code) {
         OperationSite site = OperationSite.register(code, "南山点", "海林县", 820,
                 "张三", "13800000000", "ACTIVE");
@@ -399,8 +613,7 @@ class OperationFlowAppServiceTest {
 
     private AirspaceApply pendingApply(Long id, Long siteId) {
         AirspaceApply apply = AirspaceApply.submit("KQ-2026-0101", siteId, "HAIL",
-                LocalDateTime.of(2026, 10, 1, 14, 0),
-                LocalDateTime.of(2026, 10, 1, 16, 0), 6000);
+                APPLY_START, APPLY_END, 6000);
         apply.setId(id);
         return apply;
     }
@@ -413,7 +626,7 @@ class OperationFlowAppServiceTest {
 
     private FireOrder issuedOrder(Long id, int planRounds) {
         FireOrder order = FireOrder.issue(
-                "ZY-2026-0101", 10L, 1L, 5L, "BL-1A", planRounds);
+                "ZY-2026-0101", 10L, 1L, 5L, "BL-1A", planRounds, PLAN_START, PLAN_END);
         order.setId(id);
         return order;
     }

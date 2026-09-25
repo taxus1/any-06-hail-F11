@@ -13,6 +13,7 @@ import com.somepro.infrastructure.persistence.support.BlockingRepositorySupport;
 import org.springframework.stereotype.Repository;
 import reactor.core.publisher.Mono;
 
+import java.util.Collection;
 import java.util.List;
 import java.util.stream.Collectors;
 
@@ -62,6 +63,18 @@ public class AirspaceApplyRepositoryImpl extends BlockingRepositorySupport imple
             AirspaceApplyPO po = mapper.selectOne(
                     Wrappers.<AirspaceApplyPO>lambdaQuery().eq(AirspaceApplyPO::getApplyNo, applyNo));
             return po == null ? null : AirspaceApplyPoConverter.toDomain(po);
+        });
+    }
+
+    @Override
+    public Mono<List<AirspaceApply>> findByIds(Collection<Long> ids) {
+        return blocking(() -> {
+            if (ids == null || ids.isEmpty()) {
+                return List.of();
+            }
+            return mapper.selectBatchIds(ids).stream()
+                    .map(AirspaceApplyPoConverter::toDomain)
+                    .collect(Collectors.toList());
         });
     }
 

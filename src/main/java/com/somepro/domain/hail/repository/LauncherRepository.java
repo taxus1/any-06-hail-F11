@@ -4,6 +4,9 @@ import com.somepro.domain.hail.model.Launcher;
 import com.somepro.domain.shared.model.PageResult;
 import reactor.core.publisher.Mono;
 
+import java.util.Collection;
+import java.util.List;
+
 /**
  * 发射装备台账仓储端口（领域层定义，基础设施层实现）。
  */
@@ -15,6 +18,9 @@ public interface LauncherRepository {
 
     /** 按装备编号查未删除的装备；查不到返回空信号。 */
     Mono<Launcher> findByCode(String launcherCode);
+
+    /** 按 id 批量查（占用投影拼装用）；空集合进、空列表出，不走库。 */
+    Mono<List<Launcher>> findByIds(Collection<Long> ids);
 
     /**
      * 分页翻看装备。

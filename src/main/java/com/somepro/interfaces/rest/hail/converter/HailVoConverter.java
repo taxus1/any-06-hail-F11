@@ -7,6 +7,7 @@ import com.somepro.domain.hail.model.EffectReport;
 import com.somepro.domain.hail.model.FireOrder;
 import com.somepro.domain.hail.model.Launcher;
 import com.somepro.domain.hail.model.OperationSite;
+import com.somepro.domain.hail.model.SiteHourSlot;
 import com.somepro.domain.shared.model.PageResult;
 import com.somepro.interfaces.rest.hail.vo.AirspaceApplyVO;
 import com.somepro.interfaces.rest.hail.vo.AmmoRecordVO;
@@ -14,8 +15,10 @@ import com.somepro.interfaces.rest.hail.vo.AmmoStockVO;
 import com.somepro.interfaces.rest.hail.vo.EffectReportVO;
 import com.somepro.interfaces.rest.hail.vo.FireOrderVO;
 import com.somepro.interfaces.rest.hail.vo.HailPageVO;
+import com.somepro.interfaces.rest.hail.vo.HourOccupantVO;
 import com.somepro.interfaces.rest.hail.vo.LauncherVO;
 import com.somepro.interfaces.rest.hail.vo.OperationSiteVO;
+import com.somepro.interfaces.rest.hail.vo.SiteHourSlotVO;
 
 import java.util.List;
 import java.util.function.Function;
@@ -62,6 +65,17 @@ public final class HailVoConverter {
                 o.getLauncherId(), o.getAmmoType(), o.getPlanRounds(), o.getUsedRounds(),
                 o.getStatus() == null ? null : o.getStatus().name(),
                 o.getStartTime(), o.getEndTime(), o.getCreateTime());
+    }
+
+    public static SiteHourSlotVO toVo(SiteHourSlot slot) {
+        List<HourOccupantVO> occupants = slot.occupants().stream()
+                .map(o -> new HourOccupantVO(o.orderNo(), o.applyId(), o.applyNo(),
+                        o.launcherId(), o.launcherCode(), o.windowStart(), o.windowEnd(),
+                        o.orderStatus()))
+                .collect(Collectors.toList());
+        return new SiteHourSlotVO(slot.hour(),
+                String.format("%02d:00-%02d:00", slot.hour(), slot.hour() + 1),
+                slot.occupied(), occupants);
     }
 
     public static AmmoRecordVO toVo(AmmoRecord r) {

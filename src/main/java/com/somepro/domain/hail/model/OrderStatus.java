@@ -14,6 +14,11 @@ public enum OrderStatus {
     DONE,
     VOID;
 
+    /** 没打完、还占着空域时段与装备的状态：已下达 / 作业中。 */
+    public boolean isOpen() {
+        return this == ISSUED || this == EXECUTING;
+    }
+
     /** 把库里 / 接口传入的状态字符串解析成枚举；非法值给明确业务报错。 */
     public static OrderStatus of(String raw) {
         if (raw == null || raw.isBlank()) {
